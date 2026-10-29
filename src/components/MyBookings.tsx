@@ -132,7 +132,7 @@ export const MyBookings: React.FC<MyBookingsProps> = ({ onStartBooking }) => {
                 onClick={onStartBooking}
                 className="mt-3 text-amber-400 font-semibold hover:underline"
               >
-                + Agendar um corte agora na Barbearia Império
+                + Agendar um corte agora na Império Barbearia
               </button>
             </div>
           )}

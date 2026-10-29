@@ -30,7 +30,12 @@ import {
   Receipt,
   Percent,
   LogOut,
-  Sparkles
+  Sparkles,
+  Layers,
+  Crown,
+  Image as ImageIcon,
+  Upload,
+  RefreshCw,
 } from 'lucide-react';
 import {
   loadAppointments,
@@ -43,11 +48,20 @@ import {
   saveBarbers,
   loadProducts,
   saveProducts,
+  loadSupplies,
+  saveSupplies,
+  loadPlans,
+  savePlans,
   loadFinancialEntries,
   saveFinancialEntries,
   addFinancialEntry,
   loadConfig,
   saveConfig,
+  loadComandas,
+  saveComandas,
+  createComanda,
+  resetAllAdminData,
+  readFileAsDataUrl,
   formatBRL,
   formatPhone,
   cleanPhoneDigits,
@@ -66,10 +80,20 @@ import {
   Barber,
   BusinessConfig,
   Product,
+  SuppliesItem,
+  SubscriptionPlan,
   FinancialEntry,
   PaymentMethod,
   FinancialType,
+  Comanda,
 } from '../types';
+import { AdminServicesTab } from './admin/AdminServicesTab';
+import { AdminSuppliesTab } from './admin/AdminSuppliesTab';
+import { AdminPlansTab } from './admin/AdminPlansTab';
+import { AdminGalleryTab } from './admin/AdminGalleryTab';
+import { AdminComandasTab } from './admin/AdminComandasTab';
+import { PDVCheckoutModal } from './admin/PDVCheckoutModal';
+import { ReceiptModal } from './admin/ReceiptModal';
 
 interface AdminDashboardProps {
   onBackToApp: () => void;
@@ -84,7 +108,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
   const [authError, setAuthError] = useState<string>('');
 
   // Active tab
-  const [activeTab, setActiveTab] = useState<'agenda' | 'financeiro' | 'barbeiros' | 'produtos' | 'clientes' | 'config'>('agenda');
+  type AdminTab =
+    | 'agenda'
+    | 'comandas'
+    | 'financeiro'
+    | 'servicos'
+    | 'barbeiros'
+    | 'produtos'
+    | 'insumos'
+    | 'planos'
+    | 'fotos'
+    | 'clientes'
+    | 'config';
+
+  const [activeTab, setActiveTab] = useState<AdminTab>('agenda');
 
   // Core data states
   const [appointments, setAppointments] = useState<Appointment[]>(() => loadAppointments());
@@ -92,8 +129,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
   const [services, setServices] = useState<Service[]>(() => loadServices());
   const [barbers, setBarbers] = useState<Barber[]>(() => loadBarbers());
   const [products, setProducts] = useState<Product[]>(() => loadProducts());
+  const [supplies, setSupplies] = useState<SuppliesItem[]>(() => loadSupplies());
+  const [plans, setPlans] = useState<SubscriptionPlan[]>(() => loadPlans());
   const [financialEntries, setFinancialEntries] = useState<FinancialEntry[]>(() => loadFinancialEntries());
   const [config, setConfig] = useState<BusinessConfig>(() => loadConfig());
+  const [comandas, setComandas] = useState<Comanda[]>(() => loadComandas());
+
+  // Comanda & PDV modal states
+  const [selectedPDVComanda, setSelectedPDVComanda] = useState<Comanda | null>(null);
+  const [selectedReceiptComanda, setSelectedReceiptComanda] = useState<Comanda | null>(null);
 
   // Agenda filters
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
@@ -110,12 +154,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
   const [showNewAptModal, setShowNewAptModal] = useState<boolean>(false);
   const [showBarberModal, setShowBarberModal] = useState<boolean>(false);
   const [editingBarber, setEditingBarber] = useState<Barber | null>(null);
+  const [barberPhotoPreview, setBarberPhotoPreview] = useState<string>('');
 
   const [showProductModal, setShowProductModal] = useState<boolean>(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   const [showSellProductModal, setShowSellProductModal] = useState<boolean>(false);
   const [showExpenseModal, setShowExpenseModal] = useState<boolean>(false);
+  const [showResetConfirmModal, setShowResetConfirmModal] = useState<boolean>(false);
 
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>('');
@@ -249,6 +295,60 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
     showToast('Agendamento excluído.');
   };
 
+  // Start service & open comanda for appointment
+  const handleStartServiceAndOpenComanda = (apt: Appointment) => {
+    // Check if open comanda already exists for this appointment
+    const existing = comandas.find((c) => c.appointmentId === apt.id && c.status === 'aberta');
+    if (existing) {
+      setActiveTab('comandas');
+      showToast(`Comanda #${existing.code} já está aberta para ${apt.customerName}.`);
+      return;
+    }
+
+    const items = apt.servicesNames.map((name, idx) => {
+      const sId = apt.serviceIds[idx];
+      const srv = services.find((s) => s.id === sId);
+      const price = srv ? srv.price : apt.totalPrice;
+      return {
+        id: 'it-' + Date.now() + '-' + idx,
+        type: 'servico' as const,
+        itemId: sId,
+        name,
+        price,
+        quantity: 1,
+        total: price,
+      };
+    });
+
+    const created = createComanda({
+      appointmentId: apt.id,
+      customerName: apt.customerName,
+      customerWhatsapp: apt.customerWhatsapp,
+      barberId: apt.barberId,
+      barberName: apt.barberName,
+      status: 'aberta',
+      items,
+      subtotal: apt.totalPrice,
+      discount: 0,
+      tip: 0,
+      total: apt.totalPrice,
+    });
+
+    // If appointment was pending, mark as confirmed
+    if (apt.status === 'pendente') {
+      const updatedApts = appointments.map((a) =>
+        a.id === apt.id ? { ...a, status: 'confirmado' as const } : a
+      );
+      setAppointments(updatedApts);
+      saveAppointments(updatedApts);
+    }
+
+    const freshComandas = loadComandas();
+    setComandas(freshComandas);
+    setActiveTab('comandas');
+    showToast(`Comanda #${created.code} aberta! Corte iniciado.`);
+  };
+
   // Barber management
   const handleSaveBarber = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -260,7 +360,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
     const start = (formData.get('start') as string) || '09:00';
     const end = (formData.get('end') as string) || '20:00';
     const commission = Number(formData.get('commission') || 50);
-    const photoUrl = (formData.get('photoUrl') as string) || BARBER_MARCUS_IMG;
+    const finalPhoto = barberPhotoPreview || (formData.get('photoUrl') as string) || (editingBarber ? editingBarber.photoUrl : BARBER_MARCUS_IMG);
     const specialtiesStr = (formData.get('specialties') as string) || 'Corte, Barba';
     const active = formData.get('active') === 'on';
 
@@ -278,7 +378,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
               bio,
               workingHours: { start, end },
               commissionPercentage: commission,
-              photoUrl: photoUrl || b.photoUrl,
+              photoUrl: finalPhoto,
               specialties,
               active,
             }
@@ -293,8 +393,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
         role: role || 'Barbeiro Profissional',
         rating: 5.0,
         totalReviews: 1,
-        photoUrl: photoUrl || BARBER_MARCUS_IMG,
-        bio: bio || 'Profissional qualificado da Barbearia Império.',
+        photoUrl: finalPhoto,
+        bio: bio || 'Profissional qualificado da Império Barbearia.',
         specialties: specialties.length ? specialties : ['Corte Imperial', 'Barba'],
         active,
         commissionPercentage: commission,
@@ -308,6 +408,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
     saveBarbers(updatedList);
     setShowBarberModal(false);
     setEditingBarber(null);
+    setBarberPhotoPreview('');
   };
 
   const handleDeleteBarber = (barberId: string) => {
@@ -462,7 +563,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
             Área Administrativa
           </h2>
           <p className="text-xs text-neutral-400 mb-6 leading-relaxed">
-            Área exclusiva e protegida para os gestores e barbeiros da <strong>Barbearia Império</strong>.
+            Área exclusiva e protegida para os gestores e barbeiros da <strong>Império Barbearia</strong>.
           </p>
 
           <form onSubmit={handleLogin} className="space-y-4">
@@ -527,7 +628,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs uppercase tracking-widest text-amber-400 font-bold">
-              Gestão Barbearia Império
+              Gestão Império Barbearia
             </span>
             <span className="text-neutral-500">·</span>
             <span className="text-xs text-emerald-400 font-semibold">Área Privada Segura</span>
@@ -625,9 +726,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
       <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 overflow-x-auto scrollbar-none">
         {[
           { id: 'agenda', label: 'Agenda & Horários', icon: Calendar },
-          { id: 'financeiro', label: 'Controle Financeiro', icon: DollarSign },
-          { id: 'barbeiros', label: 'Modificar Barbeiros', icon: Scissors },
-          { id: 'produtos', label: 'Produtos & Estoque', icon: Package },
+          {
+            id: 'comandas',
+            label: 'Comandas & PDV',
+            icon: Receipt,
+            badge: comandas.filter((c) => c.status === 'aberta').length,
+          },
+          { id: 'financeiro', label: 'Financeiro', icon: DollarSign },
+          { id: 'servicos', label: 'Serviços & Cortes', icon: Scissors },
+          { id: 'barbeiros', label: 'Barbeiros & Fotos', icon: User },
+          { id: 'produtos', label: 'Produtos (Balcão)', icon: Package },
+          { id: 'insumos', label: 'Insumos da Barbearia', icon: Layers },
+          { id: 'planos', label: 'Planos & Pagamentos', icon: Crown },
+          { id: 'fotos', label: 'Fotos & Landing Page', icon: ImageIcon },
           { id: 'clientes', label: 'Clientes (WhatsApp)', icon: Users },
           { id: 'config', label: 'Configurações', icon: Settings },
         ].map((tab) => {
@@ -636,8 +747,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap ${
+              onClick={() => setActiveTab(tab.id as AdminTab)}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-colors whitespace-nowrap relative ${
                 isActive
                   ? 'bg-amber-400 text-neutral-950 shadow-sm'
                   : 'text-neutral-400 hover:text-neutral-200 bg-neutral-900/60 border border-neutral-800'
@@ -645,10 +756,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
             >
               <Icon className="w-3.5 h-3.5" />
               <span>{tab.label}</span>
+              {Boolean(tab.badge && tab.badge > 0) && (
+                <span
+                  className={`text-[10px] font-bold px-1.5 py-0.2 rounded-full ${
+                    isActive
+                      ? 'bg-neutral-950 text-amber-400'
+                      : 'bg-amber-400 text-neutral-950'
+                  }`}
+                >
+                  {tab.badge}
+                </span>
+              )}
             </button>
           );
         })}
       </div>
+
+      {/* ========================================================= */}
+      {/* TAB: COMANDAS & PDV */}
+      {/* ========================================================= */}
+      {activeTab === 'comandas' && (
+        <AdminComandasTab
+          comandas={comandas}
+          onComandasChange={setComandas}
+          config={config}
+          services={services}
+          products={products}
+          barbers={barbers}
+          onOpenPDV={(cmd) => setSelectedPDVComanda(cmd)}
+          onOpenReceipt={(cmd) => setSelectedReceiptComanda(cmd)}
+          showToast={showToast}
+        />
+      )}
 
       {/* ========================================================= */}
       {/* TAB 1: AGENDA */}
@@ -793,6 +932,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
                         <MessageCircle className="w-3.5 h-3.5" />
                         <span>Chamar WhatsApp</span>
                       </a>
+
+                      {/* Abrir Comanda / Iniciar Corte */}
+                      {apt.status !== 'concluido' && apt.status !== 'cancelado' && (
+                        <button
+                          onClick={() => handleStartServiceAndOpenComanda(apt)}
+                          className="px-3 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-neutral-950 text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                        >
+                          <Scissors className="w-3.5 h-3.5" />
+                          <span>Iniciar Corte & Comanda</span>
+                        </button>
+                      )}
 
                       {apt.status !== 'confirmado' && apt.status !== 'concluido' && (
                         <button
@@ -1022,26 +1172,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
       )}
 
       {/* ========================================================= */}
-      {/* TAB 3: MODIFICAR BARBEIROS */}
+      {/* TAB: CADASTRAR & MODIFICAR SERVIÇOS DE CORTE / BARBA */}
+      {/* ========================================================= */}
+      {activeTab === 'servicos' && (
+        <AdminServicesTab
+          services={services}
+          onServicesChange={setServices}
+          showToast={showToast}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* TAB: MODIFICAR BARBEIROS */}
       {/* ========================================================= */}
       {activeTab === 'barbeiros' && (
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h2 className="font-display text-lg font-bold text-neutral-100">
-                Gerenciar Equipe de Barbeiros
+                Gerenciar Equipe de Barbeiros & Fotos
               </h2>
               <p className="text-xs text-neutral-400">
-                Adicione, edite dados, fotos, horários de expediente e porcentagem de comissão.
+                Adicione barbeiros, envie fotos do celular ou computador, defina horários de expediente e porcentagem de comissão.
               </p>
             </div>
 
             <button
               onClick={() => {
                 setEditingBarber(null);
+                setBarberPhotoPreview(BARBER_MARCUS_IMG);
                 setShowBarberModal(true);
               }}
-              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold text-xs flex items-center gap-1.5 transition-colors"
+              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold text-xs flex items-center gap-1.5 transition-colors shadow-lg shadow-amber-400/10"
             >
               <Plus className="w-4 h-4 stroke-[2.5]" />
               <span>Novo Barbeiro</span>
@@ -1109,6 +1271,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
                   <button
                     onClick={() => {
                       setEditingBarber(barber);
+                      setBarberPhotoPreview(barber.photoUrl);
                       setShowBarberModal(true);
                     }}
                     className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
@@ -1253,6 +1416,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
       )}
 
       {/* ========================================================= */}
+      {/* TAB: INSUMOS DA BARBEARIA (USO INTERNO) */}
+      {/* ========================================================= */}
+      {activeTab === 'insumos' && (
+        <AdminSuppliesTab
+          supplies={supplies}
+          onSuppliesChange={setSupplies}
+          showToast={showToast}
+          onRefreshFinancial={() => setFinancialEntries(loadFinancialEntries())}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* TAB: PLANOS DE ASSINATURA & PAGAMENTOS */}
+      {/* ========================================================= */}
+      {activeTab === 'planos' && (
+        <AdminPlansTab
+          plans={plans}
+          onPlansChange={setPlans}
+          config={config}
+          onConfigChange={setConfig}
+          showToast={showToast}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* TAB: FOTOS & GALERIA DA LANDING PAGE */}
+      {/* ========================================================= */}
+      {activeTab === 'fotos' && (
+        <AdminGalleryTab
+          config={config}
+          onConfigChange={setConfig}
+          showToast={showToast}
+        />
+      )}
+
+      {/* ========================================================= */}
       {/* TAB 5: CLIENTES (CRM) */}
       {/* ========================================================= */}
       {activeTab === 'clientes' && (
@@ -1350,14 +1549,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
       {/* TAB 6: CONFIGURAÇÕES */}
       {/* ========================================================= */}
       {activeTab === 'config' && (
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            saveConfig(config);
-            showToast('Configurações salvas com sucesso!');
-          }}
-          className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-8 space-y-6 max-w-3xl"
-        >
+        <div className="space-y-6">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveConfig(config);
+              showToast('Configurações salvas com sucesso!');
+            }}
+            className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 sm:p-8 space-y-6 max-w-3xl"
+          >
           <h2 className="font-display text-lg font-bold text-neutral-100">
             Dados do Estabelecimento & Horários
           </h2>
@@ -1439,12 +1639,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
           <div className="flex justify-end pt-2">
             <button
               type="submit"
-              className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold text-xs"
+              className="px-6 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-neutral-950 font-bold text-xs shadow-lg shadow-amber-400/10"
             >
               Salvar Alterações
             </button>
           </div>
         </form>
+
+        {/* Clean slate card */}
+        <div className="bg-neutral-900 border border-rose-500/20 rounded-2xl p-6 sm:p-8 space-y-4 max-w-3xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-400 flex items-center justify-center border border-rose-500/20">
+              <RefreshCw className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-display text-base font-bold text-neutral-100">
+                Zerar Dados Operacionais de Teste
+              </h3>
+              <p className="text-xs text-neutral-400">
+                Limpa agendamentos, lançamentos financeiros e clientes de teste para você iniciar com sua barbearia real zerada.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-neutral-950 p-4 rounded-xl border border-neutral-800 text-xs text-neutral-300 space-y-1">
+            <p>
+              ⚠️ <strong className="text-rose-400">O que será zerado:</strong> Todos os agendamentos da agenda, entradas e despesas do financeiro e histórico de clientes.
+            </p>
+            <p>
+              ✅ <strong className="text-emerald-400">O que será mantido:</strong> Seus serviços cadastrados, sua equipe de barbeiros, seus produtos, insumos e planos de assinatura.
+            </p>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="button"
+              onClick={() => setShowResetConfirmModal(true)}
+              className="px-5 py-2.5 rounded-xl bg-rose-600/90 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-2 transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Zerar Dados Operacionais Agora</span>
+            </button>
+          </div>
+        </div>
+      </div>
       )}
 
       {/* ========================================================= */}
@@ -1559,17 +1797,73 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
                 />
               </div>
 
-              <div>
-                <label className="block font-medium text-neutral-300 mb-1">Foto de Perfil (URL ou selecionar modelo)</label>
-                <select
-                  name="photoUrl"
-                  defaultValue={editingBarber?.photoUrl || BARBER_MARCUS_IMG}
-                  className="w-full bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-2 text-neutral-100"
-                >
-                  <option value={BARBER_MARCUS_IMG}>Perfil 1 - Master Barber (Marcus)</option>
-                  <option value={BARBER_LUCAS_IMG}>Perfil 2 - Estilista Jovem (Lucas)</option>
-                  <option value={BARBER_RAFAEL_IMG}>Perfil 3 - Barba Clássica (Rafael)</option>
-                </select>
+              {/* Barber Photo Upload & Preview */}
+              <div className="bg-neutral-950 p-3.5 rounded-xl border border-neutral-800 space-y-3">
+                <label className="block font-semibold text-neutral-200">
+                  Foto do Barbeiro (Upload ou URL)
+                </label>
+
+                <div className="flex items-center gap-4">
+                  <img
+                    src={barberPhotoPreview || editingBarber?.photoUrl || BARBER_MARCUS_IMG}
+                    alt="Preview Barbeiro"
+                    className="w-16 h-16 rounded-full object-cover border-2 border-amber-400 shrink-0 shadow-lg"
+                  />
+                  <div className="flex-1 space-y-2">
+                    <label className="flex items-center justify-center gap-2 px-3 py-2 border border-dashed border-amber-500/30 hover:border-amber-400 rounded-lg cursor-pointer bg-amber-500/5 hover:bg-amber-500/10 text-amber-400 font-semibold transition-colors text-center">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Enviar foto do seu dispositivo</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          try {
+                            const dataUrl = await readFileAsDataUrl(file);
+                            setBarberPhotoPreview(dataUrl);
+                          } catch {
+                            alert('Erro ao carregar imagem.');
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <input
+                      type="url"
+                      placeholder="Ou cole a URL da foto (https://...)"
+                      value={barberPhotoPreview}
+                      onChange={(e) => setBarberPhotoPreview(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-neutral-100 placeholder-neutral-500 text-[11px] focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 pt-1">
+                  <span className="text-[10px] text-neutral-400">Modelos:</span>
+                  <button
+                    type="button"
+                    onClick={() => setBarberPhotoPreview(BARBER_MARCUS_IMG)}
+                    className="text-[10px] px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800"
+                  >
+                    Marcus
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBarberPhotoPreview(BARBER_LUCAS_IMG)}
+                    className="text-[10px] px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800"
+                  >
+                    Lucas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBarberPhotoPreview(BARBER_RAFAEL_IMG)}
+                    className="text-[10px] px-2 py-0.5 rounded bg-neutral-900 text-neutral-300 hover:text-amber-400 border border-neutral-800"
+                  >
+                    Rafael
+                  </button>
+                </div>
               </div>
 
               <div className="flex items-center gap-2 pt-1">
@@ -2095,6 +2389,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
             </form>
           </div>
         </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: CONFIRMAR ZERAR DADOS OPERACIONAIS */}
+      {/* ========================================================= */}
+      {showResetConfirmModal && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-rose-500/30 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+            <div className="w-12 h-12 rounded-full bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/20">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center">
+              <h3 className="font-display text-lg font-bold text-neutral-100">
+                Zerar Todos os Dados Operacionais?
+              </h3>
+              <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
+                Esta ação vai limpar todos os agendamentos da agenda, todo o histórico do financeiro e a lista de clientes para você iniciar suas operações 100% limpas.
+              </p>
+            </div>
+
+            <div className="bg-neutral-950 p-3 rounded-xl border border-neutral-800 text-xs text-neutral-300">
+              <p className="font-semibold text-emerald-400 mb-1">
+                Seus serviços, barbeiros, produtos e configurações NÃO serão apagados.
+              </p>
+              <p className="text-neutral-500 text-[11px]">
+                Apenas dados operacionais de teste serão removidos.
+              </p>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirmModal(false)}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-semibold text-xs"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  resetAllAdminData();
+                  setAppointments([]);
+                  setCustomers([]);
+                  setFinancialEntries([]);
+                  setComandas([]);
+                  setShowResetConfirmModal(false);
+                  showToast('Painel operacional zerado com sucesso! Pronto para cadastrar suas informações reais.');
+                }}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs shadow-lg shadow-rose-600/20"
+              >
+                Sim, Zerar Agora
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: FECHAMENTO DE COMANDA & PDV */}
+      {/* ========================================================= */}
+      {selectedPDVComanda && (
+        <PDVCheckoutModal
+          isOpen={!!selectedPDVComanda}
+          onClose={() => setSelectedPDVComanda(null)}
+          comanda={selectedPDVComanda}
+          config={config}
+          services={services}
+          products={products}
+          barbers={barbers}
+          onCompleted={(closed) => {
+            setSelectedPDVComanda(null);
+            setComandas(loadComandas());
+            setFinancialEntries(loadFinancialEntries());
+            setAppointments(loadAppointments());
+            setProducts(loadProducts());
+            setSelectedReceiptComanda(closed);
+          }}
+          showToast={showToast}
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL: NOTA NÃO FISCAL / CUPOM TÉRMICO */}
+      {/* ========================================================= */}
+      {selectedReceiptComanda && (
+        <ReceiptModal
+          isOpen={!!selectedReceiptComanda}
+          onClose={() => setSelectedReceiptComanda(null)}
+          comanda={selectedReceiptComanda}
+          config={config}
+        />
       )}
     </div>
   );

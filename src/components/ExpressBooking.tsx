@@ -30,18 +30,22 @@ import {
   createCustomerWhatsAppMessageUrl,
   getTodayDateString,
 } from '../services/storage';
-import { Appointment, Barber, Customer, Service } from '../types';
+import { Appointment, Barber, Customer, Service, ClientUser } from '../types';
 
 interface ExpressBookingProps {
   onGoHome?: () => void;
   preselectedServiceId?: string;
   preselectedBarberId?: string;
+  currentUser?: ClientUser | null;
+  onOpenAuth?: () => void;
 }
 
 export const ExpressBooking: React.FC<ExpressBookingProps> = ({
   onGoHome,
   preselectedServiceId,
   preselectedBarberId,
+  currentUser,
+  onOpenAuth,
 }) => {
   const services = useMemo(() => loadServices(), []);
   const barbers = useMemo(() => loadBarbers().filter((b) => b.active), []);
@@ -58,16 +62,35 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
   const [selectedTime, setSelectedTime] = useState<string>('');
 
   // WhatsApp and customer identification states
-  const [whatsappInput, setWhatsappInput] = useState<string>('');
-  const [customerName, setCustomerName] = useState<string>('');
+  const [whatsappInput, setWhatsappInput] = useState<string>(
+    currentUser?.whatsapp ? formatPhone(currentUser.whatsapp) : ''
+  );
+  const [customerName, setCustomerName] = useState<string>(currentUser?.name || '');
   const [clientNotes, setClientNotes] = useState<string>('');
   const [identifiedCustomer, setIdentifiedCustomer] = useState<Customer | null>(null);
-  const [isSearchingCustomer, setIsSearchingCustomer] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
   // Booking result state
   const [completedAppointment, setCompletedAppointment] = useState<Appointment | null>(null);
   const [formError, setFormError] = useState<string>('');
+
+  // Sync with currentUser if logs in while on this screen
+  useEffect(() => {
+    if (currentUser) {
+      if (currentUser.name && !customerName) {
+        setCustomerName(currentUser.name);
+      }
+      if (currentUser.whatsapp) {
+        const formatted = formatPhone(currentUser.whatsapp);
+        setWhatsappInput(formatted);
+        const found = findCustomerByPhone(currentUser.whatsapp);
+        if (found) {
+          setIdentifiedCustomer(found);
+          setCustomerName(found.name);
+        }
+      }
+    }
+  }, [currentUser]);
 
   // Calculate total price and duration
   const selectedServices = useMemo(() => {
@@ -141,9 +164,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
 
     const digits = cleanPhoneDigits(rawVal);
     if (digits.length >= 10) {
-      setIsSearchingCustomer(true);
       const found = findCustomerByPhone(digits);
-      setIsSearchingCustomer(false);
       if (found) {
         setIdentifiedCustomer(found);
         setCustomerName(found.name);
@@ -201,7 +222,11 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
     }
 
     // Auto-register or update customer in CRM database
-    const savedCustomer = registerOrUpdateCustomer(customerName, whatsappInput, clientNotes);
+    const savedCustomer = registerOrUpdateCustomer(
+      customerName,
+      whatsappInput,
+      clientNotes || (currentUser ? `Usuário Google: ${currentUser.email}` : undefined)
+    );
 
     const newAppointment: Appointment = {
       id: 'apt-' + Date.now(),
@@ -236,7 +261,6 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
     return (
       <div className="max-w-2xl mx-auto px-4 py-8 sm:py-12">
         <div className="bg-neutral-900 border border-amber-500/30 rounded-2xl p-6 sm:p-8 shadow-2xl relative overflow-hidden text-center">
-          {/* Subtle gold glow */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-28 bg-amber-500/10 blur-3xl pointer-events-none" />
 
           <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-amber-500 to-amber-300 flex items-center justify-center text-neutral-950 mx-auto mb-4 shadow-lg shadow-amber-500/20">
@@ -250,7 +274,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
             Horário Garantido no Império!
           </h2>
           <p className="text-neutral-400 text-sm max-w-md mx-auto mb-6">
-            Obrigado, <strong className="text-neutral-200">{completedAppointment.customerName}</strong>! Seus dados foram salvos com sucesso e você receberá o atendimento VIP.
+            Obrigado, <strong className="text-neutral-200">{completedAppointment.customerName}</strong>! Seus dados foram salvos com sucesso na <strong className="text-amber-400">Império Barbearia</strong>.
           </p>
 
           {/* Details summary */}
@@ -309,7 +333,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                   setCompletedAppointment(null);
                   setSelectedTime('');
                 }}
-                className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors"
+                className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-medium transition-colors cursor-pointer"
               >
                 Fazer Outro Agendamento
               </button>
@@ -317,7 +341,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
               {onGoHome && (
                 <button
                   onClick={onGoHome}
-                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-950 border border-neutral-700 hover:border-neutral-500 text-neutral-300 text-xs font-medium transition-colors"
+                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-950 border border-neutral-700 hover:border-neutral-500 text-neutral-300 text-xs font-medium transition-colors cursor-pointer"
                 >
                   Ir para Página Inicial
                 </button>
@@ -344,10 +368,10 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
               Link de Agendamento Rápido
             </span>
             <span className="text-neutral-500">·</span>
-            <span className="text-xs text-neutral-400">Express para Clientes</span>
+            <span className="text-xs text-neutral-400">Império Barbearia</span>
           </div>
           <h1 className="font-display text-xl sm:text-2xl font-bold text-neutral-100 mt-0.5">
-            Agende seu Horário na Barbearia Império
+            Agende seu Horário na Império Barbearia
           </h1>
           <p className="text-xs text-neutral-400 mt-1">
             Escolha o serviço, selecione seu barbeiro e confirme pelo WhatsApp. Rápido e sem burocracia.
@@ -356,7 +380,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
 
         <button
           onClick={handleCopyQuickLink}
-          className="shrink-0 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 hover:text-amber-300 border border-amber-500/30 text-xs font-medium transition-colors"
+          className="shrink-0 flex items-center gap-2 px-3.5 py-2 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-amber-400 hover:text-amber-300 border border-amber-500/30 text-xs font-medium transition-colors cursor-pointer"
           title="Copie este link para enviar pelo WhatsApp aos seus clientes"
         >
           {copiedLink ? (
@@ -399,7 +423,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                   type="button"
                   key={srv.id}
                   onClick={() => toggleService(srv.id)}
-                  className={`text-left p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
+                  className={`text-left p-3.5 rounded-xl border transition-all flex flex-col justify-between cursor-pointer ${
                     isSelected
                       ? 'bg-amber-500/10 border-amber-500/60 shadow-sm'
                       : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700'
@@ -456,7 +480,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                   type="button"
                   key={barber.id}
                   onClick={() => setSelectedBarberId(barber.id)}
-                  className={`text-left p-3.5 rounded-xl border transition-all flex items-center gap-3 ${
+                  className={`text-left p-3.5 rounded-xl border transition-all flex items-center gap-3 cursor-pointer ${
                     isSelected
                       ? 'bg-amber-500/10 border-amber-500/60 shadow-sm'
                       : 'bg-neutral-950/60 border-neutral-800 hover:border-neutral-700'
@@ -518,7 +542,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                   type="button"
                   key={item.dateStr}
                   onClick={() => setSelectedDate(item.dateStr)}
-                  className={`px-3.5 py-2 rounded-xl text-center shrink-0 border transition-all ${
+                  className={`px-3.5 py-2 rounded-xl text-center shrink-0 border transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-amber-400 text-neutral-950 font-bold border-amber-400 shadow-md'
                       : 'bg-neutral-950 text-neutral-400 border-neutral-800 hover:border-neutral-700 hover:text-neutral-200'
@@ -553,7 +577,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                       disabled={!slot.available}
                       onClick={() => setSelectedTime(slot.time)}
                       title={slot.available ? 'Disponível' : slot.conflictReason}
-                      className={`py-2 px-1 text-xs rounded-lg font-medium tabular-nums transition-all border ${
+                      className={`py-2 px-1 text-xs rounded-lg font-medium tabular-nums transition-all border cursor-pointer ${
                         !slot.available
                           ? 'bg-neutral-950/40 text-neutral-600 border-neutral-900 cursor-not-allowed line-through'
                           : isSelected
@@ -570,21 +594,78 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
           </div>
         </section>
 
-        {/* Step 4: WhatsApp Identification & Instant Recognition */}
+        {/* Step 4: WhatsApp Identification & Google Account Link */}
         <section className="bg-neutral-900/90 border border-neutral-800 rounded-2xl p-5 sm:p-6 relative overflow-hidden">
-          <div className="flex items-center gap-2.5 mb-4">
-            <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center text-xs font-bold border border-amber-500/20">
-              4
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center text-xs font-bold border border-amber-500/20">
+                4
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-neutral-100">
+                  Identificação do Cliente
+                </h2>
+                <p className="text-xs text-neutral-400">
+                  Digite seu WhatsApp ou entre com sua Conta Google.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-base font-semibold text-neutral-100">
-                Identificação Rápida via WhatsApp
-              </h2>
-              <p className="text-xs text-neutral-400">
-                Se já tiver cadastro, o sistema reconhece automaticamente na hora.
-              </p>
-            </div>
+
+            {/* Optional Google login trigger */}
+            {!currentUser && onOpenAuth && (
+              <button
+                type="button"
+                onClick={onOpenAuth}
+                className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 text-xs font-medium flex items-center gap-1.5 border border-white/10 transition-colors cursor-pointer self-start sm:self-auto"
+              >
+                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
+                  />
+                </svg>
+                <span>Fazer Login Google</span>
+              </button>
+            )}
           </div>
+
+          {/* If Logged in with Google badge */}
+          {currentUser && (
+            <div className="bg-neutral-950 border border-neutral-800 rounded-xl p-3.5 mb-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <img
+                  src={currentUser.avatarUrl}
+                  alt={currentUser.name}
+                  className="w-9 h-9 rounded-full object-cover border border-amber-400 shrink-0"
+                />
+                <div>
+                  <div className="text-xs font-semibold text-neutral-100 flex items-center gap-1.5">
+                    <span>{currentUser.name}</span>
+                    <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1.5 py-0.2 rounded font-medium">
+                      Google
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-neutral-400">{currentUser.email}</span>
+                </div>
+              </div>
+              <span className="text-emerald-400 text-xs font-medium flex items-center gap-1">
+                <CheckCircle2 className="w-4 h-4" />
+                <span className="hidden sm:inline">Conectado</span>
+              </span>
+            </div>
+          )}
 
           <div className="space-y-4">
             <div>
@@ -597,7 +678,7 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                   placeholder="(11) 98765-4321"
                   value={whatsappInput}
                   onChange={handlePhoneChange}
-                  className="w-full bg-neutral-950 border border-neutral-700 focus:border-amber-400 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none tabular-nums"
+                  className="w-full bg-neutral-950 border border-neutral-700 focus:border-amber-400 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none tabular-nums font-mono"
                   required
                 />
                 <Phone className="w-4 h-4 text-neutral-500 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -606,14 +687,14 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
 
             {/* Smart Detection Banner */}
             {identifiedCustomer && (
-              <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-4 text-xs text-emerald-300 flex items-start gap-3 animate-fadeIn">
+              <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-4 text-xs text-emerald-300 flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-semibold text-sm text-emerald-200">
                     🎉 Bem-vindo de volta, {identifiedCustomer.name}!
                   </p>
                   <p className="mt-0.5 text-neutral-300">
-                    Localizamos seu cadastro com <strong>{identifiedCustomer.totalAppointments} atendimentos</strong> na Barbearia Império. Seus dados já estão salvos e você não precisa preencher nada a mais!
+                    Localizamos seu cadastro com <strong>{identifiedCustomer.totalAppointments} atendimentos</strong> na Império Barbearia. Seus dados já estão salvos e você não precisa preencher nada a mais!
                   </p>
                 </div>
               </div>

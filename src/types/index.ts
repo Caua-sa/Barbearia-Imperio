@@ -8,6 +8,7 @@ export interface Service {
   durationMinutes: number;
   price: number;
   popular?: boolean;
+  active?: boolean;
 }
 
 export interface Barber {
@@ -89,6 +90,37 @@ export interface Appointment {
   createdAt: string;
 }
 
+export interface SuppliesItem {
+  id: string;
+  name: string;
+  category: 'descartavel' | 'higiene' | 'quimica' | 'lounge' | 'outro';
+  quantity: number;
+  minQuantity: number;
+  unit: 'un' | 'cx' | 'pct' | 'litros';
+  costPrice: number;
+  supplier?: string;
+  lastRestocked?: string;
+}
+
+export interface SubscriptionPlan {
+  id: string;
+  name: string;
+  priceMonthly: number;
+  description: string;
+  benefits: string[];
+  popular?: boolean;
+  active: boolean;
+  checkoutUrl?: string;
+}
+
+export interface GalleryPhoto {
+  id: string;
+  url: string;
+  title: string;
+  category?: 'ambiente' | 'corte' | 'equipe' | 'outro';
+  createdAt: string;
+}
+
 export interface BusinessConfig {
   name: string;
   slogan: string;
@@ -103,4 +135,74 @@ export interface BusinessConfig {
   closingHour: string; // "20:00"
   slotIntervalMinutes: number; // 30
   pixKey: string;
+  heroImageUrl?: string;
+  galleryPhotos?: GalleryPhoto[];
+  plansPaymentPix?: string;
+  plansPaymentLink?: string;
+  plansInstructions?: string;
+  cnpj?: string;
+  // Mercado Pago API integration
+  mpAccessToken?: string;
+  mpPublicKey?: string;
+  mpEnvironment?: 'sandbox' | 'production';
+}
+
+export interface ClientUser {
+  id: string;
+  name: string;
+  email: string;
+  avatarUrl: string;
+  whatsapp?: string; // Linked WhatsApp number (optional)
+  provider: 'google';
+  createdAt: string;
+}
+
+export interface ClientSubscription {
+  id: string;
+  planId: string;
+  planName: string;
+  priceMonthly: number;
+  customerName: string;
+  customerWhatsapp: string;
+  customerEmail?: string;
+  startDate: string; // YYYY-MM-DD
+  expiresAt: string; // YYYY-MM-DD
+  status: 'active' | 'cancelled' | 'expired';
+  cancelledAt?: string; // YYYY-MM-DD HH:mm:ss
+  paymentMethod: 'mercado_pago' | 'pix' | 'cartao' | 'balcao';
+  mpPaymentId?: string;
+  autoRenew: boolean;
+  createdAt: string;
+}
+
+export interface ComandaItem {
+  id: string;
+  type: 'servico' | 'produto' | 'outro';
+  itemId?: string;
+  name: string;
+  price: number;
+  quantity: number;
+  total: number;
+}
+
+export interface Comanda {
+  id: string;
+  code: number; // e.g. 101, 102
+  appointmentId?: string;
+  customerName: string;
+  customerWhatsapp: string;
+  barberId: string;
+  barberName: string;
+  status: 'aberta' | 'fechada' | 'cancelada';
+  openedAt: string; // ISO string
+  closedAt?: string; // ISO string
+  items: ComandaItem[];
+  subtotal: number;
+  discount: number;
+  tip: number; // gorjeta do barbeiro
+  total: number;
+  paymentMethod?: PaymentMethod | 'mercado_pago' | 'plano_vip';
+  amountReceived?: number;
+  changeDue?: number;
+  notes?: string;
 }
