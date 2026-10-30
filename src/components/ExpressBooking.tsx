@@ -30,7 +30,7 @@ import {
   createCustomerWhatsAppMessageUrl,
   getTodayDateString,
 } from '../services/storage';
-import { Appointment, Barber, Customer, Service, ClientUser } from '../types';
+import { Appointment, Barber, Customer, Service, ClientUser, BusinessConfig } from '../types';
 
 interface ExpressBookingProps {
   onGoHome?: () => void;
@@ -47,19 +47,43 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
   currentUser,
   onOpenAuth,
 }) => {
-  const services = useMemo(() => loadServices(), []);
-  const barbers = useMemo(() => loadBarbers().filter((b) => b.active), []);
-  const config = useMemo(() => loadConfig(), []);
+  const [services, setServices] = useState<Service[]>(() => loadServices());
+  const [barbers, setBarbers] = useState<Barber[]>(() => loadBarbers().filter((b) => b.active));
+  const [config, setConfig] = useState<BusinessConfig>(() => loadConfig());
+
+  // Listen for storage updates across all tabs/server sync
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      setServices(loadServices());
+      setBarbers(loadBarbers().filter((b) => b.active));
+      setConfig(loadConfig());
+    };
+    window.addEventListener('imperio_storage_updated', handleStorageUpdate);
+    return () => window.removeEventListener('imperio_storage_updated', handleStorageUpdate);
+  }, []);
 
   // Form states
-  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>(
-    preselectedServiceId ? [preselectedServiceId] : ['srv-combo-rei']
-  );
-  const [selectedBarberId, setSelectedBarberId] = useState<string>(
-    preselectedBarberId || barbers[0]?.id || ''
-  );
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>(() => {
+    if (preselectedServiceId) return [preselectedServiceId];
+    const initialServices = loadServices();
+    return initialServices[0]?.id ? [initialServices[0].id] : ['srv-combo-rei'];
+  });
+
+  const [selectedBarberId, setSelectedBarberId] = useState<string>(() => {
+    if (preselectedBarberId) return preselectedBarberId;
+    const initialBarbers = loadBarbers().filter((b) => b.active);
+    return initialBarbers[0]?.id || '';
+  });
+
   const [selectedDate, setSelectedDate] = useState<string>(getTodayDateString());
   const [selectedTime, setSelectedTime] = useState<string>('');
+
+  // Keep selectedBarberId valid if barbers change
+  useEffect(() => {
+    if (barbers.length > 0 && (!selectedBarberId || !barbers.some((b) => b.id === selectedBarberId))) {
+      setSelectedBarberId(barbers[0].id);
+    }
+  }, [barbers, selectedBarberId]);
 
   // WhatsApp and customer identification states
   const [whatsappInput, setWhatsappInput] = useState<string>(
@@ -216,14 +240,15 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
       setFormError('Informe um número de WhatsApp válido com DDD (ex: 11 98765-4321).');
       return;
     }
-    if (!identifiedCustomer && (!customerName || customerName.trim().length < 2)) {
-      setFormError('Por favor, digite seu nome para que possamos te identificar e salvar seu cadastro.');
+    const cleanName = (customerName || identifiedCustomer?.name || currentUser?.name || '').trim();
+    if (!cleanName || cleanName.length < 2) {
+      setFormError('Por favor, digite seu nome completo para que possamos confirmar seu agendamento.');
       return;
     }
 
     // Auto-register or update customer in CRM database
     const savedCustomer = registerOrUpdateCustomer(
-      customerName,
+      cleanName,
       whatsappInput,
       clientNotes || (currentUser ? `Usuário Google: ${currentUser.email}` : undefined)
     );
@@ -668,9 +693,34 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
           )}
 
           <div className="space-y-4">
+            {/* Customer Name Input - Always visible */}
+            <div>
+              <label className="block text-xs font-medium text-neutral-300 mb-1.5 flex items-center justify-between">
+                <span>Seu Nome Completo *</span>
+                {identifiedCustomer && (
+                  <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Cliente Cadastrado</span>
+                  </span>
+                )}
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Carlos Silva"
+                value={customerName}
+                onChange={(e) => {
+                  setCustomerName(e.target.value);
+                  setFormError('');
+                }}
+                className="w-full bg-neutral-950 border border-neutral-700 focus:border-amber-400 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none"
+                required
+              />
+            </div>
+
+            {/* WhatsApp Input */}
             <div>
               <label className="block text-xs font-medium text-neutral-300 mb-1.5">
-                Número de WhatsApp (com DDD)
+                Número de WhatsApp (com DDD) *
               </label>
               <div className="relative">
                 <input
@@ -683,45 +733,22 @@ export const ExpressBooking: React.FC<ExpressBookingProps> = ({
                 />
                 <Phone className="w-4 h-4 text-neutral-500 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none" />
               </div>
+              <span className="text-[11px] text-neutral-500 mt-1 block">
+                Ao finalizar, seus dados ficam salvos para que o próximo agendamento seja instantâneo sem recadastro.
+              </span>
             </div>
 
             {/* Smart Detection Banner */}
             {identifiedCustomer && (
-              <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-4 text-xs text-emerald-300 flex items-start gap-3">
+              <div className="bg-emerald-950/40 border border-emerald-500/40 rounded-xl p-3.5 text-xs text-emerald-300 flex items-start gap-3">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
                 <div>
                   <p className="font-semibold text-sm text-emerald-200">
                     🎉 Bem-vindo de volta, {identifiedCustomer.name}!
                   </p>
                   <p className="mt-0.5 text-neutral-300">
-                    Localizamos seu cadastro com <strong>{identifiedCustomer.totalAppointments} atendimentos</strong> na Império Barbearia. Seus dados já estão salvos e você não precisa preencher nada a mais!
+                    Localizamos seu histórico com <strong>{identifiedCustomer.totalAppointments} atendimentos</strong> na Império Barbearia. Seu agendamento será confirmado automaticamente.
                   </p>
-                </div>
-              </div>
-            )}
-
-            {/* If New Customer, show Name input */}
-            {!identifiedCustomer && cleanPhoneDigits(whatsappInput).length >= 10 && (
-              <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4 space-y-3">
-                <div className="flex items-center gap-2 text-xs text-amber-400 font-medium">
-                  <Sparkles className="w-4 h-4" />
-                  <span>Novo no Império? Informe seu nome para salvar seu cadastro:</span>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-neutral-300 mb-1">
-                    Seu Nome Completo *
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex: Carlos Silva"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    className="w-full bg-neutral-950 border border-neutral-700 focus:border-amber-400 rounded-xl px-4 py-2.5 text-sm text-neutral-100 placeholder-neutral-600 focus:outline-none"
-                    required
-                  />
-                  <span className="text-[11px] text-neutral-500 mt-1 block">
-                    ✓ Seus dados serão salvos automaticamente para que o próximo agendamento seja instantâneo.
-                  </span>
                 </div>
               </div>
             )}

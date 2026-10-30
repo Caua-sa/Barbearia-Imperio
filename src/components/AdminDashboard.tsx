@@ -68,6 +68,7 @@ import {
   getTodayDateString,
   createAdminToCustomerWhatsAppUrl,
   registerOrUpdateCustomer,
+  syncWithServer,
   BARBER_MARCUS_IMG,
   BARBER_LUCAS_IMG,
   BARBER_RAFAEL_IMG,
@@ -165,10 +166,65 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
 
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<string>('');
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3000);
+  };
+
+  // Sync data across all browsers and devices in real time
+  React.useEffect(() => {
+    const handleStorageUpdate = () => {
+      setAppointments(loadAppointments());
+      setCustomers(loadCustomers());
+      setServices(loadServices());
+      setBarbers(loadBarbers());
+      setProducts(loadProducts());
+      setSupplies(loadSupplies());
+      setPlans(loadPlans());
+      setFinancialEntries(loadFinancialEntries());
+      setConfig(loadConfig());
+      setComandas(loadComandas());
+    };
+
+    window.addEventListener('imperio_storage_updated', handleStorageUpdate);
+
+    // Initial sync with backend
+    syncWithServer();
+
+    // Auto-sync polling every 8 seconds so appointments/barbers appear live across browsers
+    const interval = setInterval(() => {
+      syncWithServer();
+    }, 8000);
+
+    return () => {
+      window.removeEventListener('imperio_storage_updated', handleStorageUpdate);
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    try {
+      const res = await syncWithServer();
+      // Reload states from updated localStorage
+      setAppointments(loadAppointments());
+      setCustomers(loadCustomers());
+      setServices(loadServices());
+      setBarbers(loadBarbers());
+      setProducts(loadProducts());
+      setSupplies(loadSupplies());
+      setPlans(loadPlans());
+      setFinancialEntries(loadFinancialEntries());
+      setConfig(loadConfig());
+      setComandas(loadComandas());
+      showToast(res ? 'Dados sincronizados com o servidor com sucesso!' : 'Servidor atualizado!');
+    } catch {
+      showToast('Erro ao sincronizar com servidor.');
+    } finally {
+      setTimeout(() => setIsSyncing(false), 500);
+    }
   };
 
   // Login handler
@@ -353,16 +409,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
   const handleSaveBarber = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
-    const name = formData.get('name') as string;
-    const nickname = formData.get('nickname') as string;
-    const role = formData.get('role') as string;
-    const bio = formData.get('bio') as string;
+    const name = (formData.get('name') as string)?.trim();
+    if (!name) {
+      showToast('Por favor, digite o nome do barbeiro.');
+      return;
+    }
+    const nickname = (formData.get('nickname') as string)?.trim() || name.split(' ')[0];
+    const role = (formData.get('role') as string)?.trim() || 'Barbeiro Profissional';
+    const bio = (formData.get('bio') as string)?.trim() || 'Profissional especialista da Império Barbearia.';
     const start = (formData.get('start') as string) || '09:00';
     const end = (formData.get('end') as string) || '20:00';
     const commission = Number(formData.get('commission') || 50);
-    const finalPhoto = barberPhotoPreview || (formData.get('photoUrl') as string) || (editingBarber ? editingBarber.photoUrl : BARBER_MARCUS_IMG);
-    const specialtiesStr = (formData.get('specialties') as string) || 'Corte, Barba';
-    const active = formData.get('active') === 'on';
+    const photoFromInput = (formData.get('photoUrl') as string)?.trim();
+    const finalPhoto = barberPhotoPreview || photoFromInput || (editingBarber ? editingBarber.photoUrl : BARBER_MARCUS_IMG);
+    const specialtiesStr = (formData.get('specialties') as string) || 'Corte Imperial, Barba, Alinhamento';
+    const active = formData.get('active') === 'on' || formData.get('active') === 'true';
 
     const specialties = specialtiesStr.split(',').map((s) => s.trim()).filter(Boolean);
 
@@ -379,29 +440,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
               workingHours: { start, end },
               commissionPercentage: commission,
               photoUrl: finalPhoto,
-              specialties,
+              specialties: specialties.length ? specialties : ['Corte Imperial', 'Barba'],
               active,
             }
           : b
       );
-      showToast('Barbeiro atualizado com sucesso!');
+      showToast('Barbeiro atualizado e sincronizado com sucesso!');
     } else {
       const newBarber: Barber = {
         id: 'barber-' + Date.now(),
         name,
-        nickname: nickname || name.split(' ')[0],
-        role: role || 'Barbeiro Profissional',
+        nickname,
+        role,
         rating: 5.0,
         totalReviews: 1,
         photoUrl: finalPhoto,
-        bio: bio || 'Profissional qualificado da Império Barbearia.',
+        bio,
         specialties: specialties.length ? specialties : ['Corte Imperial', 'Barba'],
         active,
         commissionPercentage: commission,
         workingHours: { start, end },
       };
       updatedList = [...barbers, newBarber];
-      showToast('Novo barbeiro cadastrado no Império!');
+      showToast('Novo barbeiro salvo e disponível para agendamento!');
     }
 
     setBarbers(updatedList);
@@ -639,6 +700,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            className="px-3.5 py-2 rounded-xl bg-neutral-900 border border-neutral-700 hover:border-amber-400 text-neutral-300 hover:text-amber-400 text-xs font-semibold flex items-center gap-2 transition-colors disabled:opacity-50"
+            title="Sincronizar dados em tempo real com todos os navegadores e dispositivos"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin text-amber-400' : ''}`} />
+            <span>{isSyncing ? 'Sincronizando...' : 'Sincronizar'}</span>
+          </button>
+
           <button
             onClick={handleCopyLink}
             className="px-3.5 py-2 rounded-xl bg-neutral-900 border border-amber-500/30 text-amber-400 hover:text-amber-300 hover:bg-neutral-800 text-xs font-semibold flex items-center gap-2 transition-colors"
@@ -1832,6 +1903,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToApp }) =
 
                     <input
                       type="url"
+                      name="photoUrl"
                       placeholder="Ou cole a URL da foto (https://...)"
                       value={barberPhotoPreview}
                       onChange={(e) => setBarberPhotoPreview(e.target.value)}

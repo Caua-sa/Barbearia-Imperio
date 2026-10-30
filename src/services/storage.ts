@@ -446,12 +446,125 @@ export function applyCleanSlateIfNeeded(): void {
 }
 applyCleanSlateIfNeeded();
 
+// Multi-browser and server synchronization helper
+export function pushToServer(key: string, data: any): void {
+  try {
+    fetch('/api/db', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: data }),
+    }).catch((err) => console.warn('Sync to server error:', err));
+  } catch {
+    // ignore
+  }
+}
+
+// Global server sync to ensure all devices / browsers share the exact same state
+export async function syncWithServer(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/db');
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (!data) return false;
+
+    // If server has no barbers/services yet (brand new server instance), initialize server with current defaults
+    if (!data.barbers || data.barbers.length === 0) {
+      const initialBundle = {
+        config: loadConfig(),
+        services: loadServices(),
+        barbers: loadBarbers(),
+        products: loadProducts(),
+        supplies: loadSupplies(),
+        plans: loadPlans(),
+        appointments: loadAppointments(),
+        customers: loadCustomers(),
+        financialEntries: loadFinancialEntries(),
+        comandas: loadComandas(),
+        subscriptions: loadSubscriptions(),
+      };
+      await fetch('/api/db', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(initialBundle),
+      });
+      return true;
+    }
+
+    // Server has data: synchronize into this browser's localStorage!
+    let hasChanges = false;
+    if (data.barbers && Array.isArray(data.barbers)) {
+      localStorage.setItem(STORAGE_BARBERS, JSON.stringify(data.barbers));
+      hasChanges = true;
+    }
+    if (data.services && Array.isArray(data.services)) {
+      localStorage.setItem(STORAGE_SERVICES, JSON.stringify(data.services));
+      hasChanges = true;
+    }
+    if (data.products && Array.isArray(data.products)) {
+      localStorage.setItem(STORAGE_PRODUCTS, JSON.stringify(data.products));
+      hasChanges = true;
+    }
+    if (data.supplies && Array.isArray(data.supplies)) {
+      localStorage.setItem(STORAGE_SUPPLIES, JSON.stringify(data.supplies));
+      hasChanges = true;
+    }
+    if (data.plans && Array.isArray(data.plans)) {
+      localStorage.setItem(STORAGE_PLANS, JSON.stringify(data.plans));
+      hasChanges = true;
+    }
+    if (data.config && typeof data.config === 'object') {
+      localStorage.setItem(STORAGE_CONFIG, JSON.stringify(data.config));
+      hasChanges = true;
+    }
+    if (data.appointments !== undefined) {
+      localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(data.appointments));
+      hasChanges = true;
+    }
+    if (data.customers !== undefined) {
+      localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify(data.customers));
+      hasChanges = true;
+    }
+    if (data.financialEntries !== undefined) {
+      localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify(data.financialEntries));
+      hasChanges = true;
+    }
+    if (data.comandas !== undefined) {
+      localStorage.setItem(STORAGE_COMANDAS, JSON.stringify(data.comandas));
+      hasChanges = true;
+    }
+    if (data.subscriptions !== undefined) {
+      localStorage.setItem(STORAGE_SUBSCRIPTIONS, JSON.stringify(data.subscriptions));
+      hasChanges = true;
+    }
+
+    if (hasChanges) {
+      window.dispatchEvent(new Event('imperio_storage_updated'));
+    }
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+// Kick off server sync on startup
+if (typeof window !== 'undefined') {
+  syncWithServer();
+  // Keep alive sync when window gains focus or online
+  window.addEventListener('focus', () => syncWithServer());
+}
+
 // Manually zero all operational data (agenda, finance, customers, comandas)
 export function resetAllAdminData(): void {
   localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify([]));
   localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify([]));
   localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify([]));
   localStorage.setItem(STORAGE_COMANDAS, JSON.stringify([]));
+  try {
+    fetch('/api/reset-operational', { method: 'POST' }).catch(() => {});
+  } catch {
+    // ignore
+  }
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 // Storage helpers
@@ -470,6 +583,8 @@ export function loadServices(): Service[] {
 
 export function saveServices(services: Service[]): void {
   localStorage.setItem(STORAGE_SERVICES, JSON.stringify(services));
+  pushToServer('services', services);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadBarbers(): Barber[] {
@@ -487,6 +602,8 @@ export function loadBarbers(): Barber[] {
 
 export function saveBarbers(barbers: Barber[]): void {
   localStorage.setItem(STORAGE_BARBERS, JSON.stringify(barbers));
+  pushToServer('barbers', barbers);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadProducts(): Product[] {
@@ -504,6 +621,8 @@ export function loadProducts(): Product[] {
 
 export function saveProducts(products: Product[]): void {
   localStorage.setItem(STORAGE_PRODUCTS, JSON.stringify(products));
+  pushToServer('products', products);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadSupplies(): SuppliesItem[] {
@@ -521,6 +640,8 @@ export function loadSupplies(): SuppliesItem[] {
 
 export function saveSupplies(supplies: SuppliesItem[]): void {
   localStorage.setItem(STORAGE_SUPPLIES, JSON.stringify(supplies));
+  pushToServer('supplies', supplies);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadPlans(): SubscriptionPlan[] {
@@ -538,6 +659,8 @@ export function loadPlans(): SubscriptionPlan[] {
 
 export function savePlans(plans: SubscriptionPlan[]): void {
   localStorage.setItem(STORAGE_PLANS, JSON.stringify(plans));
+  pushToServer('plans', plans);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadFinancialEntries(): FinancialEntry[] {
@@ -556,6 +679,8 @@ export function loadFinancialEntries(): FinancialEntry[] {
 
 export function saveFinancialEntries(entries: FinancialEntry[]): void {
   localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify(entries));
+  pushToServer('financialEntries', entries);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function addFinancialEntry(entry: Omit<FinancialEntry, 'id' | 'createdAt'>): FinancialEntry {
@@ -584,6 +709,8 @@ export function loadCustomers(): Customer[] {
 
 export function saveCustomers(customers: Customer[]): void {
   localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify(customers));
+  pushToServer('customers', customers);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadAppointments(): Appointment[] {
@@ -602,6 +729,8 @@ export function loadAppointments(): Appointment[] {
 
 export function saveAppointments(appointments: Appointment[]): void {
   localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(appointments));
+  pushToServer('appointments', appointments);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function loadConfig(): BusinessConfig {
@@ -626,6 +755,8 @@ export function loadConfig(): BusinessConfig {
 
 export function saveConfig(config: BusinessConfig): void {
   localStorage.setItem(STORAGE_CONFIG, JSON.stringify(config));
+  pushToServer('config', config);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 // Find customer by whatsapp digits
@@ -803,6 +934,8 @@ export function loadSubscriptions(): ClientSubscription[] {
 
 export function saveSubscriptions(subs: ClientSubscription[]): void {
   localStorage.setItem(STORAGE_SUBSCRIPTIONS, JSON.stringify(subs));
+  pushToServer('subscriptions', subs);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 // Checks if subscription is still valid to use benefits
@@ -921,6 +1054,8 @@ export function loadComandas(): Comanda[] {
 
 export function saveComandas(comandas: Comanda[]): void {
   localStorage.setItem(STORAGE_COMANDAS, JSON.stringify(comandas));
+  pushToServer('comandas', comandas);
+  window.dispatchEvent(new Event('imperio_storage_updated'));
 }
 
 export function getNextComandaCode(): number {

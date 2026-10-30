@@ -1,31 +1,39 @@
 import { ClientUser } from '../types';
 import { cleanPhoneDigits, registerOrUpdateCustomer } from './storage';
 
-const STORAGE_AUTH_USER = 'imperio_barbearia_auth_user_v1';
+const STORAGE_AUTH_USER = 'imperio_barbearia_auth_user_v2';
 
 export function getCurrentUser(): ClientUser | null {
   try {
+    // Clear legacy hardcoded key if present
+    localStorage.removeItem('imperio_barbearia_auth_user_v1');
     const raw = localStorage.getItem(STORAGE_AUTH_USER);
     if (!raw) return null;
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // Safety check: ensure owner's admin email is never treated as a default client account
+    if (parsed && (parsed.email === 'athensco2023@gmail.com' || parsed.email === '')) {
+      localStorage.removeItem(STORAGE_AUTH_USER);
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
 }
 
-export function loginWithGoogle(data?: {
-  name?: string;
-  email?: string;
+export function loginWithGoogle(data: {
+  name: string;
+  email: string;
   avatarUrl?: string;
   whatsapp?: string;
 }): ClientUser {
-  const email = data?.email || 'athensco2023@gmail.com';
-  const name = data?.name || 'Cliente Império';
-  const whatsapp = data?.whatsapp ? cleanPhoneDigits(data.whatsapp) : undefined;
+  const email = data.email.trim();
+  const name = data.name.trim();
+  const whatsapp = data.whatsapp ? cleanPhoneDigits(data.whatsapp) : undefined;
 
-  // Generate consistent initial/avatar
+  // Generate consistent initials/avatar
   const avatarUrl =
-    data?.avatarUrl ||
+    data.avatarUrl ||
     `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=d97706`;
 
   const user: ClientUser = {
@@ -73,5 +81,6 @@ export function updateLinkedWhatsapp(phone: string): ClientUser | null {
 
 export function logoutClient(): void {
   localStorage.removeItem(STORAGE_AUTH_USER);
+  localStorage.removeItem('imperio_barbearia_auth_user_v1');
   window.dispatchEvent(new Event('imperio_auth_changed'));
 }

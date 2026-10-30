@@ -12,6 +12,7 @@ import { MyBookings } from './components/MyBookings';
 import { AuthModal } from './components/AuthModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { getCurrentUser } from './services/auth';
+import { syncWithServer } from './services/storage';
 import { ClientUser } from './types';
 
 export default function App() {
@@ -23,6 +24,15 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<ClientUser | null>(() => getCurrentUser());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+
+  // Sync with server on initial render & periodically
+  useEffect(() => {
+    syncWithServer();
+    const timer = setInterval(() => {
+      syncWithServer();
+    }, 12000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Listen for auth state changes
   useEffect(() => {
