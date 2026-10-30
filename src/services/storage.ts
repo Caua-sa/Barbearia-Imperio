@@ -15,20 +15,79 @@ import {
   SuppliesItem,
 } from '../types';
 
-// Image paths generated for Barbearia Império
-export const HERO_IMAGE = '/src/assets/images/barbershop_hero_1793279569824.jpg';
-export const BARBER_MARCUS_IMG = '/src/assets/images/barber_marcus_1793279571037.jpg';
-export const BARBER_LUCAS_IMG = '/src/assets/images/barber_lucas_1793279572541.jpg';
-export const BARBER_RAFAEL_IMG = '/src/assets/images/barber_rafael_1793279571807.jpg';
+import heroImgUrl from '../assets/images/barbershop_hero_1793279569824.jpg';
+import barberMarcusImgUrl from '../assets/images/barber_marcus_1793279571037.jpg';
+import barberLucasImgUrl from '../assets/images/barber_lucas_1793279572541.jpg';
+import barberRafaelImgUrl from '../assets/images/barber_rafael_1793279571807.jpg';
 
-// Helper to convert uploaded File to Base64 Data URL
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
+// Image paths bundled by Vite for Vercel and production deployment
+export const HERO_IMAGE = heroImgUrl;
+export const BARBER_MARCUS_IMG = barberMarcusImgUrl;
+export const BARBER_LUCAS_IMG = barberLucasImgUrl;
+export const BARBER_RAFAEL_IMG = barberRafaelImgUrl;
+
+// Helper to normalize any legacy string URLs to the bundled assets
+export function resolveImageUrl(url: string | undefined): string {
+  if (!url) return BARBER_MARCUS_IMG;
+  if (url.includes('barber_marcus') || url.includes('marcus_1793279571037')) return BARBER_MARCUS_IMG;
+  if (url.includes('barber_lucas') || url.includes('lucas_1793279572541')) return BARBER_LUCAS_IMG;
+  if (url.includes('barber_rafael') || url.includes('rafael_1793279571807')) return BARBER_RAFAEL_IMG;
+  if (url.includes('barbershop_hero') || url.includes('hero_1793279569824')) return HERO_IMAGE;
+  return url;
+}
+
+// Helper to convert and compress uploaded File to compact Base64 Data URL (prevents localStorage QuotaExceededError on Vercel)
+export function compressImageFile(file: File, maxWidth = 480, maxHeight = 480, quality = 0.82): Promise<string> {
+  return new Promise((resolve) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = (error) => reject(error);
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      if (!result) {
+        resolve(BARBER_MARCUS_IMG);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width = Math.round((width * maxHeight) / height);
+              height = maxHeight;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            resolve(result);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        } catch {
+          resolve(result);
+        }
+      };
+      img.onerror = () => resolve(result);
+      img.src = result;
+    };
+    reader.onerror = () => resolve(BARBER_MARCUS_IMG);
     reader.readAsDataURL(file);
   });
+}
+
+export function readFileAsDataUrl(file: File): Promise<string> {
+  return compressImageFile(file);
 }
 
 export const INITIAL_SERVICES: Service[] = [
@@ -446,6 +505,41 @@ export function applyCleanSlateIfNeeded(): void {
 }
 applyCleanSlateIfNeeded();
 
+// Cross-tab and window real-time broadcast channel (100% functional on Vercel)
+let broadcastChannel: BroadcastChannel | null = null;
+if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+  try {
+    broadcastChannel = new BroadcastChannel('imperio_sync_channel');
+    broadcastChannel.onmessage = (event) => {
+      if (event.data?.type === 'STORAGE_CHANGED') {
+        window.dispatchEvent(new Event('imperio_storage_updated'));
+      }
+    };
+  } catch {
+    // fallback to storage event
+  }
+}
+
+// Dispatches local event and broadcasts to all other browser tabs/windows
+export function notifyStorageUpdated(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('imperio_storage_updated'));
+    if (broadcastChannel) {
+      try {
+        broadcastChannel.postMessage({ type: 'STORAGE_CHANGED', timestamp: Date.now() });
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', () => {
+    window.dispatchEvent(new Event('imperio_storage_updated'));
+  });
+}
+
 // Multi-browser and server synchronization helper
 export function pushToServer(key: string, data: any): void {
   try {
@@ -453,7 +547,9 @@ export function pushToServer(key: string, data: any): void {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ [key]: data }),
-    }).catch((err) => console.warn('Sync to server error:', err));
+    }).catch(() => {
+      // Server not reachable or static host without backend: perfectly normal, data is already saved locally!
+    });
   } catch {
     // ignore
   }
@@ -464,8 +560,12 @@ export async function syncWithServer(): Promise<boolean> {
   try {
     const res = await fetch('/api/db');
     if (!res.ok) return false;
+    const contentType = res.headers.get('content-type') || '';
+    // If the host returned an HTML fallback (Vercel SPA rewrite), ignore gracefully
+    if (!contentType.includes('application/json')) return false;
+
     const data = await res.json();
-    if (!data) return false;
+    if (!data || typeof data !== 'object') return false;
 
     // If server has no barbers/services yet (brand new server instance), initialize server with current defaults
     if (!data.barbers || data.barbers.length === 0) {
@@ -486,59 +586,154 @@ export async function syncWithServer(): Promise<boolean> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(initialBundle),
-      });
+      }).catch(() => {});
       return true;
     }
 
-    // Server has data: synchronize into this browser's localStorage!
+    // Server has data: synchronize into this browser's localStorage using non-destructive Smart Merge!
     let hasChanges = false;
-    if (data.barbers && Array.isArray(data.barbers)) {
-      localStorage.setItem(STORAGE_BARBERS, JSON.stringify(data.barbers));
+    if (data.barbers && Array.isArray(data.barbers) && data.barbers.length > 0) {
+      const currentLocal = loadBarbers();
+      const barberMap = new Map<string, Barber>();
+      data.barbers.forEach((b: Barber) => {
+        if (b && b.id) barberMap.set(b.id, { ...b, photoUrl: resolveImageUrl(b.photoUrl) });
+      });
+      currentLocal.forEach((b: Barber) => {
+        if (b && b.id) barberMap.set(b.id, { ...b, photoUrl: resolveImageUrl(b.photoUrl) });
+      });
+      const mergedBarbers = Array.from(barberMap.values());
+      localStorage.setItem(STORAGE_BARBERS, JSON.stringify(mergedBarbers));
+      if (mergedBarbers.length > data.barbers.length) {
+        pushToServer('barbers', mergedBarbers);
+      }
       hasChanges = true;
     }
-    if (data.services && Array.isArray(data.services)) {
-      localStorage.setItem(STORAGE_SERVICES, JSON.stringify(data.services));
+
+    if (data.services && Array.isArray(data.services) && data.services.length > 0) {
+      const currentLocal = loadServices();
+      const serviceMap = new Map<string, Service>();
+      data.services.forEach((s: Service) => {
+        if (s && s.id) serviceMap.set(s.id, s);
+      });
+      currentLocal.forEach((s: Service) => {
+        if (s && s.id) serviceMap.set(s.id, s);
+      });
+      const mergedServices = Array.from(serviceMap.values());
+      localStorage.setItem(STORAGE_SERVICES, JSON.stringify(mergedServices));
       hasChanges = true;
     }
-    if (data.products && Array.isArray(data.products)) {
-      localStorage.setItem(STORAGE_PRODUCTS, JSON.stringify(data.products));
+
+    if (data.products && Array.isArray(data.products) && data.products.length > 0) {
+      const currentLocal = loadProducts();
+      const productMap = new Map<string, Product>();
+      data.products.forEach((p: Product) => {
+        if (p && p.id) productMap.set(p.id, p);
+      });
+      currentLocal.forEach((p: Product) => {
+        if (p && p.id) productMap.set(p.id, p);
+      });
+      localStorage.setItem(STORAGE_PRODUCTS, JSON.stringify(Array.from(productMap.values())));
       hasChanges = true;
     }
-    if (data.supplies && Array.isArray(data.supplies)) {
-      localStorage.setItem(STORAGE_SUPPLIES, JSON.stringify(data.supplies));
+
+    if (data.supplies && Array.isArray(data.supplies) && data.supplies.length > 0) {
+      const currentLocal = loadSupplies();
+      const supplyMap = new Map<string, SuppliesItem>();
+      data.supplies.forEach((s: SuppliesItem) => {
+        if (s && s.id) supplyMap.set(s.id, s);
+      });
+      currentLocal.forEach((s: SuppliesItem) => {
+        if (s && s.id) supplyMap.set(s.id, s);
+      });
+      localStorage.setItem(STORAGE_SUPPLIES, JSON.stringify(Array.from(supplyMap.values())));
       hasChanges = true;
     }
-    if (data.plans && Array.isArray(data.plans)) {
-      localStorage.setItem(STORAGE_PLANS, JSON.stringify(data.plans));
+
+    if (data.plans && Array.isArray(data.plans) && data.plans.length > 0) {
+      const currentLocal = loadPlans();
+      const planMap = new Map<string, SubscriptionPlan>();
+      data.plans.forEach((p: SubscriptionPlan) => {
+        if (p && p.id) planMap.set(p.id, p);
+      });
+      currentLocal.forEach((p: SubscriptionPlan) => {
+        if (p && p.id) planMap.set(p.id, p);
+      });
+      localStorage.setItem(STORAGE_PLANS, JSON.stringify(Array.from(planMap.values())));
       hasChanges = true;
     }
-    if (data.config && typeof data.config === 'object') {
+
+    if (data.config && typeof data.config === 'object' && Object.keys(data.config).length > 0) {
       localStorage.setItem(STORAGE_CONFIG, JSON.stringify(data.config));
       hasChanges = true;
     }
-    if (data.appointments !== undefined) {
-      localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(data.appointments));
+
+    if (data.appointments !== undefined && Array.isArray(data.appointments)) {
+      const currentLocal = loadAppointments();
+      const aptMap = new Map<string, Appointment>();
+      data.appointments.forEach((a: Appointment) => {
+        if (a && a.id) aptMap.set(a.id, a);
+      });
+      currentLocal.forEach((a: Appointment) => {
+        if (a && a.id) aptMap.set(a.id, a);
+      });
+      localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(Array.from(aptMap.values())));
       hasChanges = true;
     }
-    if (data.customers !== undefined) {
-      localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify(data.customers));
+
+    if (data.customers !== undefined && Array.isArray(data.customers)) {
+      const currentLocal = loadCustomers();
+      const custMap = new Map<string, Customer>();
+      data.customers.forEach((c: Customer) => {
+        if (c && c.id) custMap.set(c.id, c);
+      });
+      currentLocal.forEach((c: Customer) => {
+        if (c && c.id) custMap.set(c.id, c);
+      });
+      localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify(Array.from(custMap.values())));
       hasChanges = true;
     }
-    if (data.financialEntries !== undefined) {
-      localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify(data.financialEntries));
+
+    if (data.financialEntries !== undefined && Array.isArray(data.financialEntries)) {
+      const currentLocal = loadFinancialEntries();
+      const finMap = new Map<string, FinancialEntry>();
+      data.financialEntries.forEach((f: FinancialEntry) => {
+        if (f && f.id) finMap.set(f.id, f);
+      });
+      currentLocal.forEach((f: FinancialEntry) => {
+        if (f && f.id) finMap.set(f.id, f);
+      });
+      localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify(Array.from(finMap.values())));
       hasChanges = true;
     }
-    if (data.comandas !== undefined) {
-      localStorage.setItem(STORAGE_COMANDAS, JSON.stringify(data.comandas));
+
+    if (data.comandas !== undefined && Array.isArray(data.comandas)) {
+      const currentLocal = loadComandas();
+      const cmdMap = new Map<string, Comanda>();
+      data.comandas.forEach((c: Comanda) => {
+        if (c && c.id) cmdMap.set(c.id, c);
+      });
+      currentLocal.forEach((c: Comanda) => {
+        if (c && c.id) cmdMap.set(c.id, c);
+      });
+      localStorage.setItem(STORAGE_COMANDAS, JSON.stringify(Array.from(cmdMap.values())));
       hasChanges = true;
     }
-    if (data.subscriptions !== undefined) {
-      localStorage.setItem(STORAGE_SUBSCRIPTIONS, JSON.stringify(data.subscriptions));
+
+    if (data.subscriptions !== undefined && Array.isArray(data.subscriptions)) {
+      const currentLocal = loadSubscriptions();
+      const subMap = new Map<string, ClientSubscription>();
+      data.subscriptions.forEach((s: ClientSubscription) => {
+        if (s && s.id) subMap.set(s.id, s);
+      });
+      currentLocal.forEach((s: ClientSubscription) => {
+        if (s && s.id) subMap.set(s.id, s);
+      });
+      localStorage.setItem(STORAGE_SUBSCRIPTIONS, JSON.stringify(Array.from(subMap.values())));
       hasChanges = true;
     }
 
     if (hasChanges) {
-      window.dispatchEvent(new Event('imperio_storage_updated'));
+      notifyStorageUpdated();
     }
     return true;
   } catch (err) {
@@ -584,7 +779,7 @@ export function loadServices(): Service[] {
 export function saveServices(services: Service[]): void {
   localStorage.setItem(STORAGE_SERVICES, JSON.stringify(services));
   pushToServer('services', services);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadBarbers(): Barber[] {
@@ -594,16 +789,37 @@ export function loadBarbers(): Barber[] {
       localStorage.setItem(STORAGE_BARBERS, JSON.stringify(INITIAL_BARBERS));
       return INITIAL_BARBERS;
     }
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.map((b: Barber) => ({
+        ...b,
+        photoUrl: resolveImageUrl(b.photoUrl),
+      }));
+    }
+    return INITIAL_BARBERS;
   } catch {
     return INITIAL_BARBERS;
   }
 }
 
 export function saveBarbers(barbers: Barber[]): void {
-  localStorage.setItem(STORAGE_BARBERS, JSON.stringify(barbers));
+  try {
+    localStorage.setItem(STORAGE_BARBERS, JSON.stringify(barbers));
+  } catch (err) {
+    console.warn('LocalStorage error while saving barbers:', err);
+    try {
+      // If quota exceeded, sanitize extra large images
+      const sanitized = barbers.map((b) => ({
+        ...b,
+        photoUrl: b.photoUrl && b.photoUrl.length > 80000 ? BARBER_MARCUS_IMG : b.photoUrl,
+      }));
+      localStorage.setItem(STORAGE_BARBERS, JSON.stringify(sanitized));
+    } catch {
+      // ignore
+    }
+  }
   pushToServer('barbers', barbers);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadProducts(): Product[] {
@@ -622,7 +838,7 @@ export function loadProducts(): Product[] {
 export function saveProducts(products: Product[]): void {
   localStorage.setItem(STORAGE_PRODUCTS, JSON.stringify(products));
   pushToServer('products', products);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadSupplies(): SuppliesItem[] {
@@ -641,7 +857,7 @@ export function loadSupplies(): SuppliesItem[] {
 export function saveSupplies(supplies: SuppliesItem[]): void {
   localStorage.setItem(STORAGE_SUPPLIES, JSON.stringify(supplies));
   pushToServer('supplies', supplies);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadPlans(): SubscriptionPlan[] {
@@ -660,7 +876,7 @@ export function loadPlans(): SubscriptionPlan[] {
 export function savePlans(plans: SubscriptionPlan[]): void {
   localStorage.setItem(STORAGE_PLANS, JSON.stringify(plans));
   pushToServer('plans', plans);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadFinancialEntries(): FinancialEntry[] {
@@ -680,7 +896,7 @@ export function loadFinancialEntries(): FinancialEntry[] {
 export function saveFinancialEntries(entries: FinancialEntry[]): void {
   localStorage.setItem(STORAGE_FINANCIAL, JSON.stringify(entries));
   pushToServer('financialEntries', entries);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function addFinancialEntry(entry: Omit<FinancialEntry, 'id' | 'createdAt'>): FinancialEntry {
@@ -710,7 +926,7 @@ export function loadCustomers(): Customer[] {
 export function saveCustomers(customers: Customer[]): void {
   localStorage.setItem(STORAGE_CUSTOMERS, JSON.stringify(customers));
   pushToServer('customers', customers);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadAppointments(): Appointment[] {
@@ -730,7 +946,7 @@ export function loadAppointments(): Appointment[] {
 export function saveAppointments(appointments: Appointment[]): void {
   localStorage.setItem(STORAGE_APPOINTMENTS, JSON.stringify(appointments));
   pushToServer('appointments', appointments);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function loadConfig(): BusinessConfig {
@@ -743,9 +959,16 @@ export function loadConfig(): BusinessConfig {
     const parsed: BusinessConfig = JSON.parse(raw);
     if (!parsed.galleryPhotos || parsed.galleryPhotos.length === 0) {
       parsed.galleryPhotos = INITIAL_CONFIG.galleryPhotos;
+    } else {
+      parsed.galleryPhotos = parsed.galleryPhotos.map((p) => ({
+        ...p,
+        url: resolveImageUrl(p.url),
+      }));
     }
     if (!parsed.heroImageUrl) {
       parsed.heroImageUrl = INITIAL_CONFIG.heroImageUrl;
+    } else {
+      parsed.heroImageUrl = resolveImageUrl(parsed.heroImageUrl);
     }
     return parsed;
   } catch {
@@ -756,7 +979,7 @@ export function loadConfig(): BusinessConfig {
 export function saveConfig(config: BusinessConfig): void {
   localStorage.setItem(STORAGE_CONFIG, JSON.stringify(config));
   pushToServer('config', config);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 // Find customer by whatsapp digits
@@ -935,7 +1158,7 @@ export function loadSubscriptions(): ClientSubscription[] {
 export function saveSubscriptions(subs: ClientSubscription[]): void {
   localStorage.setItem(STORAGE_SUBSCRIPTIONS, JSON.stringify(subs));
   pushToServer('subscriptions', subs);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 // Checks if subscription is still valid to use benefits
@@ -1055,7 +1278,7 @@ export function loadComandas(): Comanda[] {
 export function saveComandas(comandas: Comanda[]): void {
   localStorage.setItem(STORAGE_COMANDAS, JSON.stringify(comandas));
   pushToServer('comandas', comandas);
-  window.dispatchEvent(new Event('imperio_storage_updated'));
+  notifyStorageUpdated();
 }
 
 export function getNextComandaCode(): number {

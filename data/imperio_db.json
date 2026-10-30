@@ -3,17 +3,16 @@
   "services": [],
   "barbers": [
     {
-      "id": "barber-1",
-      "name": "Marcus Vinicius",
-      "nickname": "Marcus",
-      "role": "Master Barber",
-      "rating": 4.95,
-      "totalReviews": 128,
-      "photoUrl": "/src/assets/images/barber_marcus_1793279571037.jpg",
-      "bio": "Especialista em degradê imperial",
+      "id": "barber-test",
+      "name": "Barbeiro Teste Vercel",
+      "nickname": "Teste",
+      "role": "Barbeiro",
+      "rating": 5,
+      "totalReviews": 1,
+      "photoUrl": "",
+      "bio": "Teste",
       "specialties": [
-        "Corte",
-        "Barba"
+        "Corte"
       ],
       "active": true,
       "commissionPercentage": 50,
@@ -31,5 +30,5 @@
   "financialEntries": [],
   "comandas": [],
   "subscriptions": [],
-  "updatedAt": "2026-10-30T11:47:26.137Z"
+  "updatedAt": "2026-10-30T11:58:19.322Z"
 }
